@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDashboardStats();
     loadRecentReports();
     loadPriorityQueue();
+    loadResolvedReports();
     setupRealtimeListeners();
 });
 
@@ -194,12 +195,18 @@ function getStatusBadge(status) {
 // --- 5. Recent Reports List ---
 function loadRecentReports() {
     const reportsList = document.getElementById('reportsList');
-    if (!reportsList || !db) return;
+    if (!reportsList || !db) {
+        console.log('DB or reportsList not found:', { db: !!db, reportsList: !!reportsList });
+        return;
+    }
 
+    console.log('Loading reports from Firebase...');
+    
     db.collection('reports')
         .orderBy('createdAt', 'desc')
         .limit(20)
         .onSnapshot((snapshot) => {
+            console.log('Reports loaded:', snapshot.size);
             reportsList.innerHTML = '';
             
             if (snapshot.empty) {
@@ -209,16 +216,19 @@ function loadRecentReports() {
 
             snapshot.forEach(doc => {
                 const data = doc.data();
+                console.log('Report:', doc.id, 'Status:', data.status);
                 const createdDate = data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleDateString() : 'Unknown';
                 const priority = data.priority || 'medium';
+                const docId = doc.id;
                 
                 // Show action buttons based on current status
                 const isResolved = data.status === 'resolved';
+                console.log('Is resolved:', isResolved, 'Status:', data.status);
                 const actionButtons = isResolved 
                     ? `<span class="text-emerald-600 text-sm font-medium">✓ Resolved</span>`
                     : `<div class="flex gap-2">
-                        <button onclick="updateReportStatus('${doc.id}', 'active')" class="px-2 py-1 text-xs bg-sky-100 text-sky-700 rounded hover:bg-sky-200">Active</button>
-                        <button onclick="updateReportStatus('${doc.id}', 'resolved')" class="px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200">Resolve</button>
+                        <button data-id="${docId}" data-status="active" class="resolve-btn px-2 py-1 text-xs bg-sky-100 text-sky-700 rounded hover:bg-sky-200">Active</button>
+                        <button data-id="${docId}" data-status="resolved" class="resolve-btn px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200">Resolve</button>
                        </div>`;
                 
                 const item = document.createElement('div');
@@ -240,8 +250,20 @@ function loadRecentReports() {
                 reportsList.appendChild(item);
             });
 
+            // Attach event listeners to buttons
+            document.querySelectorAll('.resolve-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const reportId = this.getAttribute('data-id');
+                    const newStatus = this.getAttribute('data-status');
+                    console.log('Resolve button clicked:', reportId, newStatus);
+                    window.updateReportStatus(reportId, newStatus);
+                });
+            });
+
             // Update map with all reports
             updateMapMarkers(snapshot.docs);
+        }, (error) => {
+            console.error('Error loading reports:', error);
         });
 }
 
@@ -292,6 +314,56 @@ function loadPriorityQueue() {
                     </div>
                 `;
                 queueContainer.appendChild(item);
+            });
+        });
+}
+
+// --- 6b. Resolved Reports Box ---
+function loadResolvedReports() {
+    const resolvedList = document.getElementById('resolvedList');
+    const resolvedCount = document.getElementById('resolvedCount');
+    if (!resolvedList || !db) return;
+
+    db.collection('reports')
+        .where('status', '==', 'resolved')
+        .orderBy('createdAt', 'desc')
+        .limit(20)
+        .onSnapshot((snapshot) => {
+            resolvedList.innerHTML = '';
+            
+            // Update count badge
+            const count = snapshot.size;
+            if (resolvedCount) {
+                resolvedCount.textContent = `${count} resolved`;
+            }
+            
+            if (snapshot.empty) {
+                resolvedList.innerHTML = '<div class="py-4 text-slate-500 italic">No resolved reports yet.</div>';
+                return;
+            }
+
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                const createdDate = data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleDateString() : 'Unknown';
+                const resolvedDate = data.resolvedAt ? new Date(data.resolvedAt.seconds * 1000).toLocaleDateString() : createdDate;
+                const priority = data.priority || 'medium';
+                
+                const item = document.createElement('div');
+                item.className = 'py-4 flex items-center justify-between hover:bg-slate-50 transition border-b border-slate-100';
+                item.innerHTML = `
+                    <div class="flex items-center gap-4">
+                        <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                        <div>
+                            <p class="font-medium text-slate-800">${data.issue || 'Unknown Issue'}</p>
+                            <p class="text-xs text-slate-500">${data.address || 'No address'} • Resolved: ${resolvedDate}</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="px-2 py-1 text-xs rounded-full border ${getPriorityBadge(priority)}">${priority.toUpperCase()}</span>
+                        <span class="px-2 py-1 text-xs rounded-full bg-emerald-100 text-emerald-700">Resolved</span>
+                    </div>
+                `;
+                resolvedList.appendChild(item);
             });
         });
 }
@@ -351,7 +423,7 @@ ${actionButtons}
 }
 
 // --- 8b. Update Report Status ---
-function updateReportStatus(reportId, newStatus) {
+window.updateReportStatus = function(reportId, newStatus) {
     if (!db) {
         alert('Database not initialized. Check console for errors.');
         console.log('db is:', db);
@@ -360,7 +432,7 @@ function updateReportStatus(reportId, newStatus) {
     
     console.log('Updating report:', reportId, 'to status:', newStatus);
     
-    // First, let's just try to update the status field only (simplest approach)
+    // Build update data - add resolvedAt timestamp when marking as resolved
     const updateData = {
         status: newStatus
     };

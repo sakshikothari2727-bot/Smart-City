@@ -57,16 +57,14 @@ function initAdminMap() {
 function updateMapMarkers(reports) {
     if (!map) return;
     
-    // Clear existing markers
     markers.forEach(marker => map.removeLayer(marker));
     markers = [];
 
-    // Priority-based colors (more important = redder)
     const priorityColors = {
-        'critical': '#dc2626',   // red-600
-        'high': '#f97316',      // orange-500
-        'medium': '#fbbf24',     // amber-400
-        'low': '#22c55e'        // green-500
+        'critical': '#dc2626',
+        'high': '#f97316',
+        'medium': '#fbbf24',
+        'low': '#22c55e'
     };
 
     reports.forEach(doc => {
@@ -97,7 +95,6 @@ function updateMapMarkers(reports) {
         }
     });
 
-    // Fit map to markers
     if (markers.length > 0) {
         const group = L.featureGroup(markers);
         map.fitBounds(group.getBounds().pad(0.1));
@@ -119,15 +116,12 @@ async function loadDashboardStats() {
 
         reportsSnapshot.forEach(doc => {
             const data = doc.data();
-            // Count by status
             if (data.status === 'pending' || data.status === 'active') pending++;
             if (data.status === 'resolved') resolved++;
-            // Count by priority
             if (data.priority === 'critical') critical++;
             if (data.priority === 'high') high++;
         });
 
-        // Update UI elements
         updateStatCard('totalReports', total);
         updateStatCard('pendingAction', pending);
         updateStatCard('resolved', resolved);
@@ -139,14 +133,12 @@ async function loadDashboardStats() {
 }
 
 function updateStatCard(elementId, value) {
-    // Try to find by data attribute first
     const element = document.querySelector(`[data-stat="${elementId}"]`);
     if (element) {
         element.textContent = value;
         return;
     }
     
-    // Fallback: update by order
     const cards = document.querySelectorAll('.bg-white\\/90.rounded-2xl');
     const statMap = {
         'totalReports': 0,
@@ -203,9 +195,8 @@ function loadRecentReports() {
     console.log('Loading reports from Firebase...');
     
     db.collection('reports')
-        .orderBy('createdAt', 'desc')
-        .limit(20)
-        .onSnapshot((snapshot) => {
+        .get()
+        .then((snapshot) => {
             console.log('Reports loaded:', snapshot.size);
             reportsList.innerHTML = '';
             
@@ -214,22 +205,33 @@ function loadRecentReports() {
                 return;
             }
 
-            snapshot.forEach(doc => {
-                const data = doc.data();
-                console.log('Report:', doc.id, 'Status:', data.status);
+            const docsArray = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+            docsArray.sort((a, b) => {
+                const dateA = a.data.createdAt ? a.data.createdAt.seconds : 0;
+                const dateB = b.data.createdAt ? b.data.createdAt.seconds : 0;
+                return dateB - dateA;
+            });
+
+            const sortedDocs = docsArray.slice(0, 20);
+
+            sortedDocs.forEach(doc => {
+                const data = doc.data;
                 const createdDate = data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleDateString() : 'Unknown';
                 const priority = data.priority || 'medium';
                 const docId = doc.id;
                 
-                // Show action buttons based on current status
                 const isResolved = data.status === 'resolved';
                 console.log('Is resolved:', isResolved, 'Status:', data.status);
-                const actionButtons = isResolved 
-                    ? `<span class="text-emerald-600 text-sm font-medium">✓ Resolved</span>`
-                    : `<div class="flex gap-2">
-                        <button data-id="${docId}" data-status="active" class="resolve-btn px-2 py-1 text-xs bg-sky-100 text-sky-700 rounded hover:bg-sky-200">Active</button>
-                        <button data-id="${docId}" data-status="resolved" class="resolve-btn px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200">Resolve</button>
-                       </div>`;
+                
+                // Build button HTML with proper z-index
+                let actionButtons;
+                if (isResolved) {
+                    actionButtons = '<span class="text-emerald-600 text-sm font-medium">✓ Resolved</span>';
+                } else {
+                    const activeBtn = '<button type="button" onclick="window.updateReportStatus(\'' + docId + '\', \'active\')" class="relative z-10 px-2 py-1 text-xs bg-sky-100 text-sky-700 rounded hover:bg-sky-200 transition">Active</button>';
+                    const resolveBtn = '<button type="button" onclick="window.updateReportStatus(\'' + docId + '\', \'resolved\')" class="relative z-10 px-2 py-1 text-xs bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200 transition">Resolve</button>';
+                    actionButtons = '<div class="flex gap-2">' + activeBtn + resolveBtn + '</div>';
+                }
                 
                 const item = document.createElement('div');
                 item.className = 'py-4 flex items-center justify-between hover:bg-slate-50 transition border-b border-slate-100';
@@ -250,29 +252,17 @@ function loadRecentReports() {
                 reportsList.appendChild(item);
             });
 
-            // Attach event listeners to buttons
-            document.querySelectorAll('.resolve-btn').forEach(btn => {
-                btn.addEventListener('click', function() {
-                    const reportId = this.getAttribute('data-id');
-                    const newStatus = this.getAttribute('data-status');
-                    console.log('Resolve button clicked:', reportId, newStatus);
-                    window.updateReportStatus(reportId, newStatus);
-                });
-            });
-
-            // Update map with all reports
             updateMapMarkers(snapshot.docs);
         }, (error) => {
             console.error('Error loading reports:', error);
         });
 }
 
-// --- 6. Priority Queue (Critical/High First) ---
+// --- 6. Priority Queue ---
 function loadPriorityQueue() {
     const queueContainer = document.querySelector('.space-y-6 > div:first-child .mt-4');
     if (!queueContainer || !db) return;
 
-    // Order by priority: critical > high > medium > low
     db.collection('reports')
         .where('status', 'in', ['pending', 'active'])
         .orderBy('createdAt', 'asc')
@@ -285,7 +275,6 @@ function loadPriorityQueue() {
                 return;
             }
 
-            // Sort by priority manually
             const priorityOrder = { 'critical': 0, 'high': 1, 'medium': 2, 'low': 3 };
             const sortedDocs = snapshot.docs.sort((a, b) => {
                 const priorityA = priorityOrder[a.data().priority] ?? 2;
@@ -331,7 +320,6 @@ function loadResolvedReports() {
         .onSnapshot((snapshot) => {
             resolvedList.innerHTML = '';
             
-            // Update count badge
             const count = snapshot.size;
             if (resolvedCount) {
                 resolvedCount.textContent = `${count} resolved`;
@@ -372,57 +360,12 @@ function loadResolvedReports() {
 function setupRealtimeListeners() {
     if (!db) return;
 
-    // Listen for all report changes - but don't reload if already using onSnapshot
-    // The loadRecentReports, loadPriorityQueue already have their own onSnapshot listeners
-    // This is just for additional real-time updates if needed
     db.collection('reports').onSnapshot(() => {
         loadDashboardStats();
     });
 }
 
-// --- 8. View Report Details ---
-function viewReport(reportId) {
-    if (!db) return;
-    
-    db.collection('reports').doc(reportId).get()
-        .then(doc => {
-            if (doc.exists) {
-                const data = doc.data();
-                const priority = data.priority || 'medium';
-                const currentStatus = data.status || 'pending';
-                
-                // Show report details with action buttons
-                const actionButtons = currentStatus === 'resolved' 
-                    ? '✅ Already Resolved'
-                    : `\n\nChoose action:\n[1] Mark as Active\n[2] Mark as Resolved\n[3] Cancel`;
-                
-                const choice = prompt(`
-📋 REPORT DETAILS
-─────────────────
-Issue: ${data.issue}
-Priority: ${priority.toUpperCase()}
-Status: ${currentStatus.toUpperCase()}
-Confidence: ${(data.confidence * 100).toFixed(1)}%
-
-Description: ${data.description || 'N/A'}
-Address: ${data.address || 'N/A'}
-Location: ${data.latitude}, ${data.longitude}
-
-🖼️ Image: ${data.imageUrl || 'N/A'}
-${actionButtons}
-`);
-                
-                if (choice === '1' && currentStatus !== 'resolved') {
-                    updateReportStatus(reportId, 'active');
-                } else if (choice === '2' && currentStatus !== 'resolved') {
-                    updateReportStatus(reportId, 'resolved');
-                }
-            }
-        })
-        .catch(error => console.error('Error viewing report:', error));
-}
-
-// --- 8b. Update Report Status ---
+// --- 8. Update Report Status ---
 window.updateReportStatus = function(reportId, newStatus) {
     if (!db) {
         alert('Database not initialized. Check console for errors.');
@@ -432,21 +375,26 @@ window.updateReportStatus = function(reportId, newStatus) {
     
     console.log('Updating report:', reportId, 'to status:', newStatus);
     
-    // Build update data - add resolvedAt timestamp when marking as resolved
     const updateData = {
         status: newStatus
     };
-    
-    console.log('Update data:', updateData);
+
+    // Add timestamp if resolving
+    if (newStatus === 'resolved' && firebase.firestore) {
+        updateData.resolvedAt = firebase.firestore.FieldValue.serverTimestamp();
+    }
     
     db.collection('reports').doc(reportId).update(updateData)
     .then(() => {
         console.log('Status updated successfully!');
-        alert(`✅ Report marked as ${newStatus.toUpperCase()}`);
+        alert('✅ Report marked as ' + newStatus.toUpperCase());
+        // Reload stats and list
+        loadDashboardStats();
+        loadRecentReports();
     })
     .catch(error => {
-        console.error('Error updating status:', error);
-        alert('Error: ' + error.message + '\n\nCode: ' + error.code);
+        console.error('Error:', error);
+        alert('Error: ' + error.message);
     });
 }
 
